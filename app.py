@@ -1,6 +1,5 @@
 import streamlit as st
 from supabase import create_client, Client
-from datetime import datetime
 import os
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -10,6 +9,41 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ── SIMPLE LOGIN SYSTEM ──────────────────────────────────────────────────────
+def check_login(username, password):
+    correct_user = st.secrets.get("APP_USERNAME")
+    correct_pass = st.secrets.get("APP_PASSWORD")
+
+    return username == correct_user and password == correct_pass
+
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+
+def login_page():
+    st.title("🔐 Login Required")
+
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+
+    if submitted:
+        if check_login(username, password):
+            st.session_state.authenticated = True
+            st.success("Login successful")
+            st.rerun()
+        else:
+            st.error("Invalid username or password")
+
+
+# ── STOP HERE IF NOT LOGGED IN ───────────────────────────────────────────────
+if not st.session_state.authenticated:
+    login_page()
+    st.stop()
+
 
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -25,7 +59,6 @@ st.markdown("""
         padding: 1rem 1.25rem;
         margin-bottom: 0.75rem;
     }
-    .record-card:hover { border-color: #4f8bf9; }
     .tag {
         background: #e8f0fe;
         color: #1a73e8;
@@ -34,44 +67,25 @@ st.markdown("""
         font-size: 0.78rem;
         font-weight: 500;
     }
-    .stat-box {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border-radius: 12px;
-        padding: 1rem;
-        text-align: center;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Supabase connection (FIXED) ───────────────────────────────────────────────
+# ── Supabase connection ───────────────────────────────────────────────────────
 @st.cache_resource
 def get_supabase() -> Client:
-    # Primary: Streamlit secrets
-    url = st.secrets.get("SUPABASE_URL")
-    key = st.secrets.get("SUPABASE_KEY")
+    url = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
+    key = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY")
 
-    # Fallback: environment variables (local dev)
-    if not url:
-        url = os.getenv("SUPABASE_URL")
-    if not key:
-        key = os.getenv("SUPABASE_KEY")
-
-    # Safety check
     if not url or not key:
-        st.error("❌ Missing Supabase credentials. Add them to st.secrets or environment variables.")
+        st.error("Missing Supabase credentials")
         st.stop()
 
     return create_client(url, key)
 
 
 def get_client():
-    try:
-        return get_supabase()
-    except Exception as e:
-        st.error(f"❌ Could not connect to Supabase: {e}")
-        st.stop()
+    return get_supabase()
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -105,193 +119,99 @@ def update_record(client, record_id: int, data: dict):
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("📋 Data Entry App")
-    st.caption("Powered by Streamlit + Supabase")
+
+    if st.button("🚪 Logout"):
+        st.session_state.authenticated = False
+        st.rerun()
+
     st.divider()
+
     page = st.radio(
         "Navigate",
         ["➕ Add Record", "🔍 Search & Browse", "📊 Stats"],
-        label_visibility="collapsed",
     )
-    st.divider()
-    st.markdown("**Supabase Table:** `records`")
-    st.markdown("**Schema fields:**")
-    st.code("id, name, email, category,\ndescription, status, created_at", language="text")
 
 
 client = get_client()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 1 — Add Record
+# PAGE 1
 # ═══════════════════════════════════════════════════════════════════════════════
 if page == "➕ Add Record":
     st.header("➕ Add New Record")
 
     with st.form("entry_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            name = st.text_input("Full Name *", placeholder="e.g. Jane Doe")
-            email = st.text_input("Email *", placeholder="e.g. jane@example.com")
-        with col2:
-            category = st.selectbox(
-                "Category *",
-                ["Customer", "Lead", "Partner", "Vendor", "Other"],
-            )
-            status = st.selectbox("Status", ["Active", "Inactive", "Pending"])
+        name = st.text_input("Full Name *")
+        email = st.text_input("Email *")
+        category = st.selectbox("Category", ["Customer", "Lead", "Partner", "Vendor", "Other"])
+        status = st.selectbox("Status", ["Active", "Inactive", "Pending"])
+        description = st.text_area("Description")
 
-        description = st.text_area(
-            "Description / Notes",
-            placeholder="Any additional information...",
-            height=100,
-        )
-
-        submitted = st.form_submit_button("💾 Save Record", use_container_width=True)
+        submitted = st.form_submit_button("Save")
 
     if submitted:
-        if not name.strip() or not email.strip():
-            st.warning("⚠️ Name and Email are required.")
+        if not name or not email:
+            st.warning("Name and Email required")
         else:
-            try:
-                insert_record(client, {
-                    "name": name.strip(),
-                    "email": email.strip().lower(),
-                    "category": category,
-                    "status": status,
-                    "description": description.strip(),
-                })
-                st.success(f"✅ Record for **{name}** saved successfully!")
-                st.balloons()
-            except Exception as e:
-                st.error(f"❌ Error saving record: {e}")
+            insert_record(client, {
+                "name": name,
+                "email": email,
+                "category": category,
+                "status": status,
+                "description": description,
+            })
+            st.success("Saved")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 2 — Search & Browse
+# PAGE 2
 # ═══════════════════════════════════════════════════════════════════════════════
 elif page == "🔍 Search & Browse":
-    st.header("🔍 Search & Browse Records")
+    st.header("Search")
 
-    col1, col2, col3 = st.columns([3, 2, 1])
-    with col1:
-        search_query = st.text_input(
-            "Search",
-            placeholder="Type to search...",
-            label_visibility="collapsed",
-        )
-    with col2:
-        search_field = st.selectbox(
-            "Search by",
-            ["Name", "Email", "Category", "Description", "Status"],
-            label_visibility="collapsed",
-        )
-    with col3:
-        do_search = st.button("🔍 Search", use_container_width=True)
+    search_query = st.text_input("Search")
+    search_field = st.selectbox("Field", ["Name", "Email", "Category", "Status"])
 
-    st.divider()
-
-    try:
-        if search_query and do_search:
-            result = search_records(client, search_query, search_field)
-            records = result.data
-            st.caption(f"Found **{len(records)}** result(s)")
-        else:
-            result = fetch_all(client)
-            records = result.data
-            st.caption(f"Showing all **{len(records)}** record(s)")
-    except Exception as e:
-        st.error(f"❌ Error fetching records: {e}")
-        records = []
+    if search_query:
+        result = search_records(client, search_query, search_field)
+        records = result.data
+    else:
+        records = fetch_all(client).data
 
     if records:
-        with st.expander("⚙️ Filter & Sort", expanded=False):
-            cat_filter = st.multiselect(
-                "Category",
-                ["Customer", "Lead", "Partner", "Vendor", "Other"],
-            )
-            status_filter = st.multiselect(
-                "Status",
-                ["Active", "Inactive", "Pending"]
-            )
+        for r in records:
+            st.write(f"{r['name']} | {r['email']} | {r['category']} | {r['status']}")
 
-            if cat_filter:
-                records = [r for r in records if r["category"] in cat_filter]
-            if status_filter:
-                records = [r for r in records if r["status"] in status_filter]
+            with st.expander("Edit"):
+                new_name = st.text_input("Name", r["name"], key=f"n{r['id']}")
+                new_email = st.text_input("Email", r["email"], key=f"e{r['id']}")
 
-    if not records:
-        st.info("No records found.")
-    else:
-        for rec in records:
-            with st.container():
-                st.markdown(f"""
-                <div class="record-card">
-                    <strong>{rec['name']}</strong>
-                    <span class="tag">{rec['category']}</span>
-                    <span class="tag">{rec['status']}</span><br>
-                    <small>📧 {rec['email']}</small><br>
-                    <small>{rec.get('description', '')[:120]}</small><br>
-                    <small style="color:#999">🕒 {rec['created_at'][:19].replace('T',' ')}</small>
-                </div>
-                """, unsafe_allow_html=True)
+                if st.button("Update", key=f"u{r['id']}"):
+                    update_record(client, r["id"], {
+                        "name": new_name,
+                        "email": new_email,
+                        "category": r["category"],
+                        "status": r["status"],
+                        "description": r.get("description", ""),
+                    })
+                    st.rerun()
 
-                with st.expander(f"Edit / Delete — ID {rec['id']}"):
-                    new_name = st.text_input("Name", rec["name"], key=f"name_{rec['id']}")
-                    new_email = st.text_input("Email", rec["email"], key=f"email_{rec['id']}")
-                    new_desc = st.text_area("Description", rec.get("description", ""), key=f"desc_{rec['id']}")
-                    new_cat = st.selectbox(
-                        "Category",
-                        ["Customer", "Lead", "Partner", "Vendor", "Other"],
-                        index=["Customer","Lead","Partner","Vendor","Other"].index(rec["category"]),
-                        key=f"cat_{rec['id']}",
-                    )
-                    new_status = st.selectbox(
-                        "Status",
-                        ["Active", "Inactive", "Pending"],
-                        index=["Active","Inactive","Pending"].index(rec["status"]),
-                        key=f"status_{rec['id']}",
-                    )
-
-                    c1, c2 = st.columns(2)
-
-                    with c1:
-                        if st.button("💾 Save", key=f"save_{rec['id']}"):
-                            update_record(client, rec["id"], {
-                                "name": new_name,
-                                "email": new_email,
-                                "category": new_cat,
-                                "status": new_status,
-                                "description": new_desc,
-                            })
-                            st.rerun()
-
-                    with c2:
-                        if st.button("🗑️ Delete", key=f"del_{rec['id']}"):
-                            delete_record(client, rec["id"])
-                            st.rerun()
+                if st.button("Delete", key=f"d{r['id']}"):
+                    delete_record(client, r["id"])
+                    st.rerun()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 3 — Stats
+# PAGE 3
 # ═══════════════════════════════════════════════════════════════════════════════
 elif page == "📊 Stats":
-    st.header("📊 Statistics")
+    st.header("Stats")
 
-    try:
-        records = fetch_all(client).data
-    except Exception as e:
-        st.error(f"❌ Error fetching records: {e}")
-        records = []
+    records = fetch_all(client).data
 
-    if not records:
-        st.info("No records yet.")
-    else:
-        total = len(records)
-        active = sum(1 for r in records if r["status"] == "Active")
-        inactive = sum(1 for r in records if r["status"] == "Inactive")
-        pending = sum(1 for r in records if r["status"] == "Pending")
+    total = len(records)
+    active = sum(1 for r in records if r["status"] == "Active")
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total", total)
-        c2.metric("Active", active)
-        c3.metric("Inactive", inactive)
-        c4.metric("Pending", pending)
+    st.metric("Total", total)
+    st.metric("Active", active)
