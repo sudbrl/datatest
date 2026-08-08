@@ -1,7 +1,3 @@
---- rich_data_app.py (原始)
-
-
-+++ rich_data_app.py (修改后)
 import streamlit as st
 from supabase import create_client, Client
 import os
